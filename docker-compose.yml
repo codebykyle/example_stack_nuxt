@@ -1,0 +1,135 @@
+services:
+  traefik:
+    image: "traefik:latest"
+    container_name: "traefik"
+    command:
+      - "--api.insecure=true"
+      - "--api.dashboard=true"
+      - "--providers.docker=true"
+      - "--providers.docker.network=traefik"
+      - "--providers.docker.exposedbydefault=false"
+      - "--accesslog"
+      - "--log.level=INFO"
+      - "--entryPoints.web.address=:80"
+      - "--entryPoints.websecure.address=:443"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8081:8080"  # Dashboard if you want it accessible
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+    networks:
+      traefik:
+        aliases:
+          - auth.kyle-desktop.local
+    restart: unless-stopped
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.1
+    container_name: keycloak
+    command: start
+    restart: unless-stopped
+    ports:
+      - "65000:8080"
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://adomi.home:5432/keycloak
+      KC_LOG_LEVEL: info
+      KC_METRICS_ENABLED: true
+      KC_HEALTH_ENABLED: true
+      KC_HTTP_ENABLED: true
+      KC_PROXY_HEADERS: forwarded
+      KC_HOSTNAME_STRICT: false
+      KC_HOSTNAME_STRICT_HTTPS: false
+    env_file:
+      - .env
+    depends_on:
+      - traefik
+    networks:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+
+      # Tell Traefik which network to use to reach this container
+      - "traefik.http.routers.keycloak.rule=Host(`auth.kyle-desktop.local`)"
+      - "traefik.http.routers.keycloak.entrypoints=web"
+
+      # Service config: which internal port to forward to
+      - "traefik.http.services.keycloak.loadbalancer.server.port=8080"
+      - "traefik.http.services.keycloak.loadbalancer.server.scheme=http"
+    healthcheck:
+      test: [
+        "CMD-SHELL",
+        "exec 3<>/dev/tcp/127.0.0.1/9000; \
+         echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3"
+      ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+  nuxt:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nuxt
+    restart: unless-stopped
+    networks:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nuxt.rule=Host(`nuxt.kyle-desktop.local`)"
+      - "traefik.http.routers.nuxt.entrypoints=web"
+      - "traefik.http.services.nuxt.loadbalancer.server.port=3000"
+      - "traefik.http.routers.nuxt.middlewares=traefik-forward-auth"
+    depends_on:
+      - traefik
+      - keycloak
+    env_file:
+      - .env
+  nuxt-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: dev
+    volumes:
+      - ./:/app                # your code
+      - /app/node_modules      # avoid overwriting installed deps
+    environment:
+      - NODE_ENV=development
+      - CHOKIDAR_USEPOLLING=true  # if you hit inotify limits on Alpine
+    ports:
+      - "3000:3000"
+    networks:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nuxt-dev.rule=Host(`nuxt-dev.kyle-desktop.local`)"
+      - "traefik.http.routers.nuxt-dev.entrypoints=web"
+      - "traefik.http.services.nuxt-dev.loadbalancer.server.port=3000"
+      - "traefik.http.routers.nuxt-dev.middlewares=traefik-forward-auth"
+  traefik-forward-auth:
+    image: thomseddon/traefik-forward-auth:v2.1.0
+    env_file:
+      - .env
+    environment:
+      - TZ=America/Detroit
+      - DEFAULT_PROVIDER=oidc
+      - DISABLE_SSL_VERIFICATION=true
+      - INSECURE_COOKIE=true
+      - COOKIE_DOMAIN=.kyle-desktop.local
+      - AUTH_HOST=sso.kyle-desktop.local
+      - LOG_LEVEL=debug
+    restart: unless-stopped
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik-forward-auth.rule=Host(`sso.kyle-desktop.local`)"
+      - "traefik.http.services.traefik-forward-auth.loadbalancer.server.port=4181"
+      - "traefik.http.middlewares.traefik-forward-auth.forwardauth.address=http://traefik-forward-auth:4181"
+      - "traefik.http.middlewares.traefik-forward-auth.forwardauth.authResponseHeaders=X-Forwarded-User"
+    networks:
+      - traefik
+networks:
+  traefik:
+    external: true
