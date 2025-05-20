@@ -16,7 +16,7 @@ export default defineNuxtConfig({
   vite: {
     server: {
       allowedHosts: [
-        'nuxt-dev.kyle-desktop.local'
+        'dev.kyle-desktop.local'
       ]
     }
   }
