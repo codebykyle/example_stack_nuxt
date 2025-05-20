@@ -9,7 +9,7 @@ services:
       - traefik
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.nuxt.rule=Host(`nuxt.kyle-desktop.local`)"
+      - "traefik.http.routers.nuxt.rule=Host(`nuxt.${TOP_LEVEL_DOMAIN}`)"
       - "traefik.http.routers.nuxt.entrypoints=web"
       - "traefik.http.services.nuxt.loadbalancer.server.port=3000"
       - "traefik.http.routers.nuxt.middlewares=authentik@docker"
